@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { collection, onSnapshot, query, orderBy, doc, setDoc } from 'firebase/firestore'
 import { db } from '../firebase'
-import * as XLSX from 'xlsx'
+import XLSXStyle from 'xlsx-js-style'
 
 const ADMIN_PW = '0000'
 
@@ -150,21 +150,107 @@ export default function SchedulePage() {
   }
 
   const exportExcel = () => {
-    const daysArr = Array.from({ length: getDaysInMonth(year, month) }, (_, i) => i + 1)
-    const headers = ['역할', '이름', ...daysArr.map(d => `${d}(${getDayLabel(year, month, d)})`), '근무일수']
-    const dataRows = employees.map(emp => {
-      const dayCells = daysArr.map(d => {
-        const isSun = getDayIdx(year, month, d) === 0
-        const state = (schedules[emp.id] || {})[d] ?? (isSun ? 'off' : 'work')
-        return state === 'work' ? '근무' : state === 'off' ? '휴무' : 'TBM'
-      })
-      return [emp.role, emp.name, ...dayCells, `${getWorkDays(emp.id).length}일`]
+    const n = getDaysInMonth(year, month)
+    const daysArr = Array.from({ length: n }, (_, i) => i + 1)
+    const TOTAL = 2 + n + 2
+
+    const th = (rgb = 'D1D5DB') => ({ style: 'thin', color: { rgb } })
+    const bdr = { top: th(), left: th(), bottom: th(), right: th() }
+    const bdrMid = { top: th('94A3B8'), left: th(), bottom: th('94A3B8'), right: th() }
+    const c = (v, s = {}) => ({ v: v ?? '', t: typeof v === 'number' ? 'n' : 's', s: { border: bdr, alignment: { horizontal: 'center', vertical: 'center' }, ...s } })
+    const blank = (s = {}) => c('', s)
+    const hdr = (v, fillRgb = '1E3A5F', textRgb = 'FBBF24') => c(v, { fill: { fgColor: { rgb: fillRgb } }, font: { bold: true, sz: 10, color: { rgb: textRgb } } })
+    const dayFill = (d) => { const i = getDayIdx(year, month, d); return i === 0 ? 'FEF2F2' : i === 6 ? 'EFF6FF' : 'F8FAFC' }
+    const dayColor = (d) => { const i = getDayIdx(year, month, d); return i === 0 ? 'DC2626' : i === 6 ? '2563EB' : '374151' }
+
+    const rows = []
+    const merges = []
+
+    // Title
+    rows.push([c(`${year}년 ${month}월 감리원 근무계획표 (TBM)`, { fill: { fgColor: { rgb: 'EFF6FF' } }, font: { bold: true, sz: 14, color: { rgb: '1E3A5F' } } }), ...Array(TOTAL - 1).fill(blank())])
+    merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: TOTAL - 1 } })
+
+    // Day numbers header
+    rows.push([
+      hdr('구 분'), hdr('성 명'),
+      ...daysArr.map(d => c(d, { fill: { fgColor: { rgb: dayFill(d) } }, font: { bold: true, sz: 9, color: { rgb: dayColor(d) } } })),
+      c('TBM\n(일수)', { fill: { fgColor: { rgb: 'FEF2F2' } }, font: { bold: true, sz: 9, color: { rgb: '991B1B' } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true } }),
+      c('근무\n(일수)', { fill: { fgColor: { rgb: '1E3A5F' } }, font: { bold: true, sz: 9, color: { rgb: 'FBBF24' } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true } }),
+    ])
+    merges.push({ s: { r: 1, c: 0 }, e: { r: 2, c: 0 } })
+    merges.push({ s: { r: 1, c: 1 }, e: { r: 2, c: 1 } })
+    merges.push({ s: { r: 1, c: 2 + n }, e: { r: 2, c: 2 + n } })
+    merges.push({ s: { r: 1, c: 2 + n + 1 }, e: { r: 2, c: 2 + n + 1 } })
+
+    // Day labels header
+    rows.push([
+      blank({ fill: { fgColor: { rgb: '1E3A5F' } } }),
+      blank({ fill: { fgColor: { rgb: '1E3A5F' } } }),
+      ...daysArr.map(d => c(getDayLabel(year, month, d), { fill: { fgColor: { rgb: dayFill(d) } }, font: { sz: 8, color: { rgb: dayColor(d) } } })),
+      blank({ fill: { fgColor: { rgb: 'FEF2F2' } } }),
+      blank({ fill: { fgColor: { rgb: '1E3A5F' } } }),
+    ])
+
+    // Employee rows
+    employees.forEach((emp, ei) => {
+      const bg = ei % 2 === 0 ? 'FFFFFF' : 'F9FAFB'
+      const tbmDays = getTBMDays(emp.id)
+      const workDays = getWorkDays(emp.id)
+      rows.push([
+        c(emp.role || '', { fill: { fgColor: { rgb: bg } }, font: { sz: 9, color: { rgb: '475569' } }, border: bdrMid }),
+        c(emp.name, { fill: { fgColor: { rgb: bg } }, font: { bold: true, sz: 10, color: { rgb: '1E3A5F' } }, border: bdrMid }),
+        ...daysArr.map(d => {
+          const isSun = getDayIdx(year, month, d) === 0
+          const state = (schedules[emp.id] || {})[d] ?? (isSun ? 'off' : 'work')
+          const fillRgb = state === 'work' ? '1A1A1A' : state === 'tbm' ? 'DC2626' : isSun ? 'FEF2F2' : 'FFFFFF'
+          return blank({ fill: { fgColor: { rgb: fillRgb } }, border: bdrMid })
+        }),
+        c(`${tbmDays.length}일`, { fill: { fgColor: { rgb: 'FEF2F2' } }, font: { bold: true, sz: 10, color: { rgb: 'DC2626' } }, border: bdrMid }),
+        c(`${workDays.length}일`, { fill: { fgColor: { rgb: bg } }, font: { bold: true, sz: 10, color: { rgb: '1E3A5F' } }, border: bdrMid }),
+      ])
     })
-    const wb = XLSX.utils.book_new()
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows])
-    ws['!cols'] = [{ wch: 14 }, { wch: 8 }, ...daysArr.map(() => ({ wch: 5 })), { wch: 8 }]
-    XLSX.utils.book_append_sheet(wb, ws, `${year}년${month}월`)
-    XLSX.writeFile(wb, `근무계획표_${year}년${month}월.xlsx`)
+
+    // Blank + TBM summary
+    rows.push(Array(TOTAL).fill(blank()))
+    const tbmHdrs = ['성 명', '직종 및 등급', 'TBM 근무일자', '근무시간', 'TBM\n근무일수', '실\n근무일수']
+    rows.push([...tbmHdrs.map(h => c(h, { fill: { fgColor: { rgb: 'FEF2F2' } }, font: { bold: true, sz: 10, color: { rgb: '991B1B' } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true } })), ...Array(TOTAL - tbmHdrs.length).fill(blank())])
+    employees.forEach((emp, ei) => {
+      const tbmDays = getTBMDays(emp.id)
+      const workDays = getWorkDays(emp.id)
+      const bg = ei % 2 === 0 ? 'FFFFFF' : 'FFF5F5'
+      const vals = [emp.name, emp.grade || '-', formatRanges(tbmDays), '06:30~15:30', `${tbmDays.length}일`, `${workDays.length}일`]
+      rows.push([...vals.map((v, i) => c(v, { fill: { fgColor: { rgb: bg } }, font: { sz: 10, ...(i === 0 ? { bold: true } : {}) }, alignment: { horizontal: i === 2 ? 'left' : 'center', vertical: 'center' } })), ...Array(TOTAL - vals.length).fill(blank())])
+    })
+
+    // Blank + Note + TBM calendar
+    rows.push(Array(TOTAL).fill(blank()))
+    const noteIdx = rows.length
+    rows.push([c('※ 근무일정은 개인 사정에 따라 변경 될 수 있음.', { font: { sz: 9, italic: true, color: { rgb: '64748B' } }, alignment: { horizontal: 'left', vertical: 'center' }, border: {} }), ...Array(TOTAL - 1).fill(blank({ border: {} }))])
+    merges.push({ s: { r: noteIdx, c: 0 }, e: { r: noteIdx, c: TOTAL - 1 } })
+
+    rows.push([hdr('성 명', 'F8FAFC', '1E3A5F'), blank({ fill: { fgColor: { rgb: 'F8FAFC' } } }), ...daysArr.map(d => c(d, { fill: { fgColor: { rgb: dayFill(d) } }, font: { sz: 8, color: { rgb: dayColor(d) } } })), blank(), blank()])
+    employees.forEach((emp, ei) => {
+      const bg = ei % 2 === 0 ? 'FFFFFF' : 'F8FAFC'
+      rows.push([
+        c(emp.name, { fill: { fgColor: { rgb: bg } }, font: { bold: true, sz: 9, color: { rgb: '1E3A5F' } } }),
+        blank({ fill: { fgColor: { rgb: bg } } }),
+        ...daysArr.map(d => {
+          const isTBM = (schedules[emp.id] || {})[d] === 'tbm'
+          return c(isTBM ? `${d}일` : '', { fill: { fgColor: { rgb: isTBM ? 'FEF2F2' : bg } }, font: { sz: 8, color: { rgb: isTBM ? 'DC2626' : '000000' }, bold: isTBM } })
+        }),
+        blank({ fill: { fgColor: { rgb: bg } } }),
+        blank({ fill: { fgColor: { rgb: bg } } }),
+      ])
+    })
+
+    const ws = XLSXStyle.utils.aoa_to_sheet(rows)
+    ws['!merges'] = merges
+    ws['!cols'] = [{ wch: 10 }, { wch: 8 }, ...daysArr.map(() => ({ wch: 3.2 })), { wch: 6 }, { wch: 6 }]
+    ws['!rows'] = [{ hpt: 28 }, { hpt: 18 }, { hpt: 12 }, ...employees.map(() => ({ hpt: 20 })), { hpt: 6 }, { hpt: 20 }, ...employees.map(() => ({ hpt: 16 })), { hpt: 6 }, { hpt: 14 }, { hpt: 14 }, ...employees.map(() => ({ hpt: 14 }))]
+
+    const wb = XLSXStyle.utils.book_new()
+    XLSXStyle.utils.book_append_sheet(wb, ws, `${year}년${month}월`)
+    XLSXStyle.writeFile(wb, `근무계획표_${year}년${month}월.xlsx`)
   }
 
   const handleAdminConfirm = () => {
