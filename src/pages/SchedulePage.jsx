@@ -210,16 +210,44 @@ export default function SchedulePage() {
       ])
     })
 
-    // Blank + TBM summary
+    // TBM summary — TBM근무일자와 근무시간은 여러 day컬럼에 merge하여 넓게 표시
+    // col 2 ~ TBM_DATE_END : TBM근무일자, TBM_DATE_END+1 ~ 2+n-1 : 근무시간
+    const TBM_DATE_END = 2 + Math.floor(n * 0.62)  // 약 62% 지점
+    const TIME_END = 1 + n                           // = 2+n-1
+
+    const tbmHdrStyle = { fill: { fgColor: { rgb: 'FEF2F2' } }, font: { bold: true, sz: 10, color: { rgb: '991B1B' } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true } }
+
     rows.push(Array(TOTAL).fill(blank()))
-    const tbmHdrs = ['성 명', '직종 및 등급', 'TBM 근무일자', '근무시간', 'TBM\n근무일수', '실\n근무일수']
-    rows.push([...tbmHdrs.map(h => c(h, { fill: { fgColor: { rgb: 'FEF2F2' } }, font: { bold: true, sz: 10, color: { rgb: '991B1B' } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true } })), ...Array(TOTAL - tbmHdrs.length).fill(blank())])
+
+    // TBM summary header
+    const tbmSumHdrIdx = rows.length
+    const tbmSumHdr = Array(TOTAL).fill(blank(tbmHdrStyle))
+    tbmSumHdr[0] = c('성 명', tbmHdrStyle)
+    tbmSumHdr[1] = c('직종 및 등급', tbmHdrStyle)
+    tbmSumHdr[2] = c('TBM 근무일자', tbmHdrStyle)
+    tbmSumHdr[TBM_DATE_END + 1] = c('근무시간', tbmHdrStyle)
+    tbmSumHdr[2 + n] = c('TBM\n근무일수', tbmHdrStyle)
+    tbmSumHdr[2 + n + 1] = c('실\n근무일수', tbmHdrStyle)
+    rows.push(tbmSumHdr)
+    merges.push({ s: { r: tbmSumHdrIdx, c: 2 }, e: { r: tbmSumHdrIdx, c: TBM_DATE_END } })
+    merges.push({ s: { r: tbmSumHdrIdx, c: TBM_DATE_END + 1 }, e: { r: tbmSumHdrIdx, c: TIME_END } })
+
+    // TBM summary data rows
     employees.forEach((emp, ei) => {
       const tbmDays = getTBMDays(emp.id)
       const workDays = getWorkDays(emp.id)
       const bg = ei % 2 === 0 ? 'FFFFFF' : 'FFF5F5'
-      const vals = [emp.name, emp.grade || '-', formatRanges(tbmDays), '06:30~15:30', `${tbmDays.length}일`, `${workDays.length}일`]
-      rows.push([...vals.map((v, i) => c(v, { fill: { fgColor: { rgb: bg } }, font: { sz: 10, ...(i === 0 ? { bold: true } : {}) }, alignment: { horizontal: i === 2 ? 'left' : 'center', vertical: 'center' } })), ...Array(TOTAL - vals.length).fill(blank())])
+      const rowIdx = rows.length
+      const row = Array(TOTAL).fill(blank({ fill: { fgColor: { rgb: bg } } }))
+      row[0] = c(emp.name, { fill: { fgColor: { rgb: bg } }, font: { bold: true, sz: 10 } })
+      row[1] = c(emp.grade || '-', { fill: { fgColor: { rgb: bg } }, font: { sz: 10 } })
+      row[2] = c(formatRanges(tbmDays), { fill: { fgColor: { rgb: bg } }, font: { sz: 10 }, alignment: { horizontal: 'left', vertical: 'center' } })
+      row[TBM_DATE_END + 1] = c('06:30~15:30', { fill: { fgColor: { rgb: bg } }, font: { sz: 10 } })
+      row[2 + n] = c(`${tbmDays.length}일`, { fill: { fgColor: { rgb: 'FEF2F2' } }, font: { bold: true, sz: 10, color: { rgb: 'DC2626' } } })
+      row[2 + n + 1] = c(`${workDays.length}일`, { fill: { fgColor: { rgb: bg } }, font: { bold: true, sz: 10, color: { rgb: '1E3A5F' } } })
+      rows.push(row)
+      merges.push({ s: { r: rowIdx, c: 2 }, e: { r: rowIdx, c: TBM_DATE_END } })
+      merges.push({ s: { r: rowIdx, c: TBM_DATE_END + 1 }, e: { r: rowIdx, c: TIME_END } })
     })
 
     // Blank + Note + TBM calendar
@@ -245,7 +273,24 @@ export default function SchedulePage() {
 
     const ws = XLSXStyle.utils.aoa_to_sheet(rows)
     ws['!merges'] = merges
-    ws['!cols'] = [{ wch: 10 }, { wch: 8 }, ...daysArr.map(() => ({ wch: 3.2 })), { wch: 6 }, { wch: 6 }]
+
+    // 컬럼 너비: day컬럼은 3.2 고정, 나머지는 내용 기준 자동
+    const colWidths = Array(TOTAL).fill(0)
+    rows.forEach(row => {
+      row.forEach((cell, ci) => {
+        if (ci >= 2 && ci < 2 + n) return // day 컬럼 skip
+        if (cell && cell.v !== '') {
+          const text = String(cell.v)
+          const w = [...text].reduce((acc, ch) =>
+            acc + (/[가-힣ㄱ-ㅎㅏ-ㅣ]/.test(ch) ? 2.2 : 1), 0)
+          colWidths[ci] = Math.max(colWidths[ci] || 0, w)
+        }
+      })
+    })
+    ws['!cols'] = colWidths.map((w, ci) => {
+      if (ci >= 2 && ci < 2 + n) return { wch: 3.2 }
+      return { wch: Math.min(Math.max(w + 2, 6), 50) }
+    })
     ws['!rows'] = [{ hpt: 28 }, { hpt: 18 }, { hpt: 12 }, ...employees.map(() => ({ hpt: 20 })), { hpt: 6 }, { hpt: 20 }, ...employees.map(() => ({ hpt: 16 })), { hpt: 6 }, { hpt: 14 }, { hpt: 14 }, ...employees.map(() => ({ hpt: 14 }))]
 
     const wb = XLSXStyle.utils.book_new()
