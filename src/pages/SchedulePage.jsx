@@ -9,8 +9,7 @@ const getDayIdx = (y, m, d) => new Date(y, m - 1, d).getDay()
 const cycleState = (s) => s === 'work' ? 'off' : s === 'off' ? 'tbm' : 'work'
 
 const cellBg = (state, isSun) => {
-  if (isSun) return '#fef2f2'
-  if (state === 'off') return '#ffffff'
+  if (state === 'off') return isSun ? '#fef2f2' : '#ffffff'
   if (state === 'tbm') return '#dc2626'
   return '#1a1a1a'
 }
@@ -47,9 +46,9 @@ export default function SchedulePage() {
   }, [year, month, employees])
 
   const handleClick = useCallback(async (empId, day) => {
-    if (getDayIdx(year, month, day) === 0) return
     const currentDays = schedules[empId] || {}
-    const next = cycleState(currentDays[day] ?? 'work')
+    const isSun = getDayIdx(year, month, day) === 0
+    const next = cycleState(currentDays[day] ?? (isSun ? 'off' : 'work'))
     const newDays = { ...currentDays, [day]: next }
     setSchedules(prev => ({ ...prev, [empId]: newDays }))
     await setDoc(doc(db, 'schedules', `${year}-${month}-${empId}`), {
@@ -77,10 +76,9 @@ export default function SchedulePage() {
 
     // 날짜별 TBM 균등 배분 (greedy: 가장 적은 사람 우선)
     for (let d = 1; d <= n; d++) {
-      if (getDayIdx(year, month, d) === 0) continue
-
+      const isSun = getDayIdx(year, month, d) === 0
       const workers = employees.filter(emp => {
-        const state = (newSchedules[emp.id] || {})[d] ?? 'work'
+        const state = (newSchedules[emp.id] || {})[d] ?? (isSun ? 'off' : 'work')
         return state === 'work'
       })
       if (workers.length === 0) continue
@@ -112,8 +110,8 @@ export default function SchedulePage() {
     const n = getDaysInMonth(year, month)
     const workDays = []
     for (let d = 1; d <= n; d++) {
-      if (getDayIdx(year, month, d) === 0) continue
-      const state = (schedules[empId] || {})[d] ?? 'work'
+      const isSun = getDayIdx(year, month, d) === 0
+      const state = (schedules[empId] || {})[d] ?? (isSun ? 'off' : 'work')
       if (state !== 'off') workDays.push(d)
     }
     if (workDays.length === 0) return '없음'
@@ -136,8 +134,8 @@ export default function SchedulePage() {
     const n = getDaysInMonth(year, month)
     let cnt = 0
     for (let d = 1; d <= n; d++) {
-      if (getDayIdx(year, month, d) === 0) continue
-      const s = (schedules[empId] || {})[d] ?? 'work'
+      const isSun = getDayIdx(year, month, d) === 0
+      const s = (schedules[empId] || {})[d] ?? (isSun ? 'off' : 'work')
       if (s !== 'off') cnt++
     }
     return cnt
@@ -215,7 +213,7 @@ export default function SchedulePage() {
                     <td style={{ ...TD, ...ROW_BORDER, padding: '0 10px', fontWeight: '700', color: '#1e3a5f', whiteSpace: 'nowrap' }}>{emp.name}</td>
                     {days.map(d => {
                       const isSun = getDayIdx(year, month, d) === 0
-                      const state = isSun ? 'off' : ((schedules[emp.id] || {})[d] ?? 'work')
+                      const state = (schedules[emp.id] || {})[d] ?? (isSun ? 'off' : 'work')
                       return (
                         <td
                           key={d}
@@ -225,7 +223,7 @@ export default function SchedulePage() {
                             ...ROW_BORDER,
                             background: cellBg(state, isSun),
                             width: '28px', minWidth: '28px', height: '34px',
-                            cursor: isSun ? 'default' : 'pointer',
+                            cursor: 'pointer',
                           }}
                         />
                       )
