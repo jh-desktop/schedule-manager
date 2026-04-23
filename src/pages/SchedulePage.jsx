@@ -17,6 +17,7 @@ const cellBg = (state, isSun) => {
 
 const TH = { border: '1px solid #d1d5db', textAlign: 'center', fontWeight: '600', fontSize: '12px' }
 const TD = { border: '1px solid #e5e7eb' }
+const ROW_BORDER = { borderTop: '2px solid #94a3b8', borderBottom: '2px solid #94a3b8' }
 
 export default function SchedulePage() {
   const today = new Date()
@@ -56,6 +57,81 @@ export default function SchedulePage() {
     })
   }, [year, month, schedules])
 
+  const autoAssignTBM = async () => {
+    if (!confirm('현재 근무 일정 기준으로 TBM을 자동 배치하시겠습니까?\n(기존 TBM은 초기화 후 재배분됩니다)')) return
+
+    const n = getDaysInMonth(year, month)
+    const tbmCounts = {}
+    employees.forEach(emp => { tbmCounts[emp.id] = 0 })
+
+    // 기존 TBM → work로 초기화
+    const newSchedules = {}
+    employees.forEach(emp => {
+      const current = schedules[emp.id] || {}
+      const cleaned = {}
+      Object.entries(current).forEach(([day, state]) => {
+        cleaned[day] = state === 'tbm' ? 'work' : state
+      })
+      newSchedules[emp.id] = cleaned
+    })
+
+    // 날짜별 TBM 균등 배분 (greedy: 가장 적은 사람 우선)
+    for (let d = 1; d <= n; d++) {
+      if (getDayIdx(year, month, d) === 0) continue
+
+      const workers = employees.filter(emp => {
+        const state = (newSchedules[emp.id] || {})[d] ?? 'work'
+        return state === 'work'
+      })
+      if (workers.length === 0) continue
+
+      const minCount = Math.min(...workers.map(w => tbmCounts[w.id]))
+      const candidates = workers.filter(w => tbmCounts[w.id] === minCount)
+      const chosen = candidates[0]
+
+      newSchedules[chosen.id] = { ...(newSchedules[chosen.id] || {}), [d]: 'tbm' }
+      tbmCounts[chosen.id]++
+    }
+
+    // 로컬 state 반영
+    setSchedules(prev => {
+      const next = { ...prev }
+      employees.forEach(emp => { next[emp.id] = newSchedules[emp.id] || {} })
+      return next
+    })
+
+    // Firestore 저장
+    for (const emp of employees) {
+      await setDoc(doc(db, 'schedules', `${year}-${month}-${emp.id}`), {
+        year, month, employeeId: emp.id, days: newSchedules[emp.id] || {}
+      })
+    }
+  }
+
+  const getWorkRanges = (empId) => {
+    const n = getDaysInMonth(year, month)
+    const workDays = []
+    for (let d = 1; d <= n; d++) {
+      if (getDayIdx(year, month, d) === 0) continue
+      const state = (schedules[empId] || {})[d] ?? 'work'
+      if (state !== 'off') workDays.push(d)
+    }
+    if (workDays.length === 0) return '없음'
+
+    const ranges = []
+    let start = workDays[0], end = workDays[0]
+    for (let i = 1; i < workDays.length; i++) {
+      if (workDays[i] === end + 1) {
+        end = workDays[i]
+      } else {
+        ranges.push(start === end ? `${start}` : `${start}~${end}`)
+        start = end = workDays[i]
+      }
+    }
+    ranges.push(start === end ? `${start}` : `${start}~${end}`)
+    return ranges.join(', ')
+  }
+
   const countWork = (empId) => {
     const n = getDaysInMonth(year, month)
     let cnt = 0
@@ -85,6 +161,13 @@ export default function SchedulePage() {
           <button onClick={nextMonth} style={navBtn}>▶</button>
           <button onClick={() => { setYear(today.getFullYear()); setMonth(today.getMonth() + 1) }} style={{ ...navBtn, background: '#1e3a5f', color: '#fff', padding: '0.3rem 0.75rem' }}>오늘</button>
         </div>
+        <button onClick={autoAssignTBM} style={{
+          padding: '0.45rem 1.1rem', background: '#dc2626', color: '#fff',
+          border: 'none', borderRadius: '0.5rem', cursor: 'pointer',
+          fontWeight: '700', fontSize: '0.85rem',
+        }}>
+          ⚡ 근무 확정 · TBM 자동배치
+        </button>
         <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem', color: '#64748b' }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><i style={{ display: 'inline-block', width: 12, height: 12, background: '#1a1a1a' }} />근무</span>
           <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><i style={{ display: 'inline-block', width: 12, height: 12, background: '#dc2626' }} />TBM</span>
@@ -99,62 +182,76 @@ export default function SchedulePage() {
           <a href="/employees" style={{ color: '#1e3a5f', fontWeight: '600' }}>직원관리 →</a>
         </div>
       ) : (
-        <div className="schedule-wrap" style={{ borderRadius: '0.5rem', boxShadow: '0 1px 4px rgba(0,0,0,0.1)' }}>
-          <table style={{ borderCollapse: 'collapse', background: '#fff', fontSize: '12px', whiteSpace: 'nowrap' }}>
-            <thead>
-              <tr>
-                <th colSpan={3} style={{ ...TH, background: '#1e3a5f', color: '#fbbf24', fontSize: '13px', padding: '0.6rem 1rem' }}>
-                  {year}년 {month}월 근무계획표 (TBM)
-                </th>
-                {days.map(d => {
-                  const idx = getDayIdx(year, month, d)
-                  const isSun = idx === 0, isSat = idx === 6
-                  return (
-                    <th key={d} style={{
-                      ...TH,
-                      background: isSun ? '#fef2f2' : isSat ? '#eff6ff' : '#f8fafc',
-                      color: isSun ? '#dc2626' : isSat ? '#2563eb' : '#374151',
-                      width: '28px', minWidth: '28px', padding: '3px 0',
-                    }}>
-                      <div>{d}</div>
-                      <div style={{ fontSize: '10px', opacity: 0.75 }}>{getDayLabel(year, month, d)}</div>
-                    </th>
-                  )
-                })}
-                <th style={{ ...TH, background: '#f8fafc', padding: '0 8px', minWidth: '52px' }}>근무<br/>일수</th>
-              </tr>
-            </thead>
-            <tbody>
-              {employees.map((emp, rowIdx) => (
-                <tr key={emp.id} style={{ background: rowIdx % 2 === 0 ? '#fff' : '#f9fafb' }}>
-                  <td style={{ ...TD, padding: '0 8px', color: '#475569', fontWeight: '500' }}>{emp.role || '-'}</td>
-                  <td style={{ ...TD, padding: '0 10px', fontWeight: '700', color: '#1e3a5f' }}>{emp.name}</td>
-                  <td style={{ ...TD, padding: '0 8px', color: '#94a3b8', fontSize: '11px' }}>{emp.grade || ''}</td>
+        <>
+          <div className="schedule-wrap" style={{ borderRadius: '0.5rem', boxShadow: '0 1px 4px rgba(0,0,0,0.1)' }}>
+            <table style={{ borderCollapse: 'collapse', background: '#fff', fontSize: '12px', whiteSpace: 'nowrap' }}>
+              <thead>
+                <tr>
+                  <th colSpan={2} style={{ ...TH, background: '#1e3a5f', color: '#fbbf24', fontSize: '13px', padding: '0.6rem 1rem' }}>
+                    {year}년 {month}월 근무계획표 (TBM)
+                  </th>
                   {days.map(d => {
-                    const isSun = getDayIdx(year, month, d) === 0
-                    const state = isSun ? 'off' : ((schedules[emp.id] || {})[d] ?? 'work')
+                    const idx = getDayIdx(year, month, d)
+                    const isSun = idx === 0, isSat = idx === 6
                     return (
-                      <td
-                        key={d}
-                        className="day-cell"
-                        onClick={() => handleClick(emp.id, d)}
-                        style={{
-                          ...TD,
-                          background: cellBg(state, isSun),
-                          width: '28px', minWidth: '28px', height: '34px',
-                          cursor: isSun ? 'default' : 'pointer',
-                        }}
-                      />
+                      <th key={d} style={{
+                        ...TH,
+                        background: isSun ? '#fef2f2' : isSat ? '#eff6ff' : '#f8fafc',
+                        color: isSun ? '#dc2626' : isSat ? '#2563eb' : '#374151',
+                        width: '28px', minWidth: '28px', padding: '3px 0',
+                      }}>
+                        <div>{d}</div>
+                        <div style={{ fontSize: '10px', opacity: 0.75 }}>{getDayLabel(year, month, d)}</div>
+                      </th>
                     )
                   })}
-                  <td style={{ ...TD, textAlign: 'center', fontWeight: '700', color: '#1e3a5f', padding: '0 4px' }}>
-                    {countWork(emp.id)}일
-                  </td>
+                  <th style={{ ...TH, background: '#f8fafc', padding: '0 8px', minWidth: '52px' }}>근무<br/>일수</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {employees.map((emp) => (
+                  <tr key={emp.id}>
+                    <td style={{ ...TD, ...ROW_BORDER, padding: '0 8px', color: '#475569', fontWeight: '500', whiteSpace: 'nowrap' }}>{emp.role || '-'}</td>
+                    <td style={{ ...TD, ...ROW_BORDER, padding: '0 10px', fontWeight: '700', color: '#1e3a5f', whiteSpace: 'nowrap' }}>{emp.name}</td>
+                    {days.map(d => {
+                      const isSun = getDayIdx(year, month, d) === 0
+                      const state = isSun ? 'off' : ((schedules[emp.id] || {})[d] ?? 'work')
+                      return (
+                        <td
+                          key={d}
+                          onClick={() => handleClick(emp.id, d)}
+                          style={{
+                            ...TD,
+                            ...ROW_BORDER,
+                            background: cellBg(state, isSun),
+                            width: '28px', minWidth: '28px', height: '34px',
+                            cursor: isSun ? 'default' : 'pointer',
+                          }}
+                        />
+                      )
+                    })}
+                    <td style={{ ...TD, ...ROW_BORDER, textAlign: 'center', fontWeight: '700', color: '#1e3a5f', padding: '0 4px' }}>
+                      {countWork(emp.id)}일
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 실 근무일 요약 */}
+          <div style={{ marginTop: '1rem', background: '#fff', borderRadius: '0.5rem', padding: '1rem 1.25rem', boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}>
+            <div style={{ fontSize: '0.8rem', fontWeight: '700', color: '#1e3a5f', marginBottom: '0.6rem' }}>
+              실 근무일 요약
+            </div>
+            {employees.map(emp => (
+              <div key={emp.id} style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.3rem', fontSize: '0.82rem', alignItems: 'baseline' }}>
+                <span style={{ fontWeight: '700', color: '#1e3a5f', minWidth: '72px', flexShrink: 0 }}>{emp.name}</span>
+                <span style={{ color: '#475569' }}>{getWorkRanges(emp.id)}</span>
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   )
