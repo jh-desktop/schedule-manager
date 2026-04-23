@@ -3,7 +3,8 @@ import { collection, addDoc, deleteDoc, doc, onSnapshot, orderBy, query, updateD
 import { db } from '../firebase'
 
 const ROLES = ['책임 감리원', '보조 감리원', '기타']
-const EMPTY = { name: '', role: '책임 감리원' }
+const GRADES = ['전기/특급', '전기/고급', '전기/중급', '전기/초급', '토목/초급', '사무원']
+const EMPTY = { name: '', role: '책임 감리원', grade: '전기/특급' }
 
 export default function EmployeePage() {
   const [employees, setEmployees] = useState([])
@@ -20,7 +21,7 @@ export default function EmployeePage() {
     if (!form.name.trim()) { setNameErr('이름을 입력해주세요.'); return }
     const maxOrder = employees.length > 0 ? Math.max(...employees.map(e => e.order ?? 0)) : 0
     await addDoc(collection(db, 'employees'), {
-      name: form.name.trim(), role: form.role,
+      name: form.name.trim(), role: form.role, grade: form.grade,
       order: maxOrder + 1, createdAt: serverTimestamp(),
     })
     setForm(EMPTY)
@@ -41,7 +42,7 @@ export default function EmployeePage() {
   }
 
   return (
-    <div style={{ padding: '1rem 1.25rem', maxWidth: '600px', margin: '0 auto' }}>
+    <div style={{ padding: '1rem 1.25rem', maxWidth: '680px', margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
         <h1 style={{ fontSize: '1.1rem', fontWeight: '700', color: '#1e3a5f' }}>
           직원 관리 <span style={{ fontSize: '0.875rem', color: '#64748b', fontWeight: '400' }}>({employees.length}명)</span>
@@ -54,7 +55,7 @@ export default function EmployeePage() {
       {adding && (
         <div style={{ background: '#fff', border: '2px solid #1e3a5f', borderRadius: '0.75rem', padding: '1.25rem', marginBottom: '1rem' }}>
           <h3 style={{ fontWeight: '700', color: '#1e3a5f', marginBottom: '1rem' }}>새 직원 추가</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
             <div>
               <label style={labelS}>이름 *</label>
               <input value={form.name} onChange={e => { setForm(p => ({ ...p, name: e.target.value })); setNameErr('') }}
@@ -62,11 +63,17 @@ export default function EmployeePage() {
               {nameErr && <div style={{ color: '#ef4444', fontSize: '12px', marginTop: '2px' }}>{nameErr}</div>}
             </div>
             <div>
-              <label style={labelS}>역할</label>
+              <label style={labelS}>역할 *</label>
               <select value={form.role} onChange={e => setForm(p => ({ ...p, role: e.target.value }))} style={inputS}>
                 {ROLES.map(r => <option key={r}>{r}</option>)}
               </select>
             </div>
+          </div>
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={labelS}>직종 및 등급 *</label>
+            <select value={form.grade} onChange={e => setForm(p => ({ ...p, grade: e.target.value }))} style={inputS}>
+              {GRADES.map(g => <option key={g}>{g}</option>)}
+            </select>
           </div>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <button onClick={() => { setAdding(false); setForm(EMPTY); setNameErr('') }}
@@ -86,8 +93,8 @@ export default function EmployeePage() {
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                {['순서', '이름', '역할', ''].map(h => (
+              <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                {['순서', '이름', '역할', '직종 및 등급', ''].map(h => (
                   <th key={h} style={{ padding: '0.7rem 1rem', textAlign: 'left', fontSize: '0.8rem', color: '#64748b', fontWeight: '600' }}>{h}</th>
                 ))}
               </tr>
@@ -103,6 +110,7 @@ export default function EmployeePage() {
                   </td>
                   <td style={{ padding: '0.7rem 1rem', fontWeight: '700', color: '#1e3a5f' }}>{emp.name}</td>
                   <td style={{ padding: '0.7rem 1rem', color: '#374151' }}>{emp.role}</td>
+                  <td style={{ padding: '0.7rem 1rem', color: '#64748b', fontSize: '0.875rem' }}>{emp.grade || '-'}</td>
                   <td style={{ padding: '0.7rem 1rem' }}>
                     <button onClick={() => handleDelete(emp.id)}
                       style={{ padding: '0.3rem 0.75rem', background: '#fef2f2', color: '#dc2626', border: '1px solid #fca5a5', borderRadius: '0.3rem', cursor: 'pointer', fontSize: '0.8rem' }}>
