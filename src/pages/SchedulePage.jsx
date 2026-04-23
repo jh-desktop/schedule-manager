@@ -196,9 +196,6 @@ export default function SchedulePage() {
           <button onClick={() => { setYear(today.getFullYear()); setMonth(today.getMonth() + 1) }} style={{ ...navBtn, background: '#1e3a5f', color: '#fff', padding: '0.3rem 0.75rem' }}>오늘</button>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <button onClick={autoAssignTBM} style={{ padding: '0.45rem 1rem', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '0.5rem', cursor: 'pointer', fontWeight: '700', fontSize: '0.85rem' }}>
-            ⚡ TBM 자동배치
-          </button>
           <button onClick={exportExcel} style={{ padding: '0.45rem 1rem', background: '#16a34a', color: '#fff', border: 'none', borderRadius: '0.5rem', cursor: 'pointer', fontWeight: '700', fontSize: '0.85rem' }}>
             📊 엑셀 저장
           </button>
@@ -220,6 +217,9 @@ export default function SchedulePage() {
       {adminMode && (
         <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '0.5rem', padding: '0.75rem 1rem', marginBottom: '1rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontWeight: '700', color: '#c2410c', fontSize: '0.85rem' }}>🔑 관리자 모드</span>
+          <button onClick={autoAssignTBM} style={{ padding: '0.4rem 0.9rem', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '0.4rem', cursor: 'pointer', fontWeight: '600', fontSize: '0.8rem' }}>
+            ⚡ TBM 자동배치
+          </button>
           <button onClick={resetTBM} style={{ padding: '0.4rem 0.9rem', background: '#fef3c7', color: '#92400e', border: '1px solid #fbbf24', borderRadius: '0.4rem', cursor: 'pointer', fontWeight: '600', fontSize: '0.8rem' }}>
             TBM 초기화
           </button>
