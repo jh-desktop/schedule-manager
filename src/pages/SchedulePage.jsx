@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
-import { collection, onSnapshot, query, orderBy, doc, setDoc } from 'firebase/firestore'
+import { collection, onSnapshot, query, orderBy, doc, setDoc, addDoc, updateDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from '../firebase'
 import XLSXStyle from 'xlsx-js-style'
-
-const ADMIN_PW = '0000'
+import { useAdmin } from '../context/AdminContext'
 
 const getDaysInMonth = (y, m) => new Date(y, m, 0).getDate()
 const getDayLabel = (y, m, d) => ['일', '월', '화', '수', '목', '금', '토'][new Date(y, m - 1, d).getDay()]
@@ -39,10 +38,7 @@ export default function SchedulePage() {
   const [month, setMonth] = useState(today.getMonth() + 1)
   const [employees, setEmployees] = useState([])
   const [schedules, setSchedules] = useState({})
-  const [adminMode, setAdminMode] = useState(false)
-  const [showAdminModal, setShowAdminModal] = useState(false)
-  const [adminInput, setAdminInput] = useState('')
-  const [adminErr, setAdminErr] = useState(false)
+  const { adminMode } = useAdmin()
 
   useEffect(() => {
     const q = query(collection(db, 'employees'), orderBy('order', 'asc'))
@@ -55,22 +51,33 @@ export default function SchedulePage() {
     const unsubs = employees.map(emp => {
       const docId = `${year}-${month}-${emp.id}`
       return onSnapshot(doc(db, 'schedules', docId), snap => {
-        setSchedules(prev => ({ ...prev, [emp.id]: snap.exists() ? (snap.data().days || {}) : {} }))
+        setSchedules(prev => ({ ...prev, [emp.id]: snap.exists() ? snap.data() : {} }))
       })
     })
     return () => unsubs.forEach(u => u())
   }, [year, month, employees])
 
   const handleClick = useCallback(async (empId, day) => {
-    const currentDays = schedules[empId] || {}
+    const emp = employees.find(e => e.id === empId)
+    if (schedules[empId]?.fixed) return
+    const currentDays = schedules[empId]?.days || {}
     const isSun = getDayIdx(year, month, day) === 0
-    const next = cycleState(currentDays[day] ?? (isSun ? 'off' : 'work'))
+    const from = currentDays[day] ?? (isSun ? 'off' : 'work')
+    let next = cycleState(from)
+    if (next === 'tbm') {
+      const alreadyHasTBM = employees.some(e => e.id !== empId && (schedules[e.id]?.days || {})[day] === 'tbm')
+      if (alreadyHasTBM) next = 'work'
+    }
     const newDays = { ...currentDays, [day]: next }
-    setSchedules(prev => ({ ...prev, [empId]: newDays }))
+    setSchedules(prev => ({ ...prev, [empId]: { ...(prev[empId] || {}), days: newDays } }))
     await setDoc(doc(db, 'schedules', `${year}-${month}-${empId}`), {
       year, month, employeeId: empId, days: newDays
+    }, { merge: true })
+    await addDoc(collection(db, 'history'), {
+      employeeId: empId, employeeName: emp?.name || '',
+      year, month, day, from, to: next, timestamp: serverTimestamp(),
     })
-  }, [year, month, schedules])
+  }, [year, month, schedules, employees])
 
   const autoAssignTBM = async () => {
     if (!confirm('현재 근무 일정 기준으로 TBM을 자동 배치하시겠습니까?\n(기존 TBM은 초기화 후 재배분됩니다)')) return
@@ -79,7 +86,7 @@ export default function SchedulePage() {
     employees.forEach(emp => { tbmCounts[emp.id] = 0 })
     const newSchedules = {}
     employees.forEach(emp => {
-      const current = schedules[emp.id] || {}
+      const current = schedules[emp.id]?.days || {}
       const cleaned = {}
       Object.entries(current).forEach(([day, state]) => { cleaned[day] = state === 'tbm' ? 'work' : state })
       newSchedules[emp.id] = cleaned
@@ -98,25 +105,25 @@ export default function SchedulePage() {
     }
     setSchedules(prev => {
       const next = { ...prev }
-      employees.forEach(emp => { next[emp.id] = newSchedules[emp.id] || {} })
+      employees.forEach(emp => { next[emp.id] = { ...(prev[emp.id] || {}), days: newSchedules[emp.id] || {} } })
       return next
     })
     for (const emp of employees) {
       await setDoc(doc(db, 'schedules', `${year}-${month}-${emp.id}`), {
         year, month, employeeId: emp.id, days: newSchedules[emp.id] || {}
-      })
+      }, { merge: true })
     }
   }
 
   const resetTBM = async () => {
     if (!confirm(`${year}년 ${month}월 TBM을 모두 초기화하시겠습니까?`)) return
     for (const emp of employees) {
-      const current = schedules[emp.id] || {}
+      const current = schedules[emp.id]?.days || {}
       const cleaned = {}
       Object.entries(current).forEach(([day, state]) => { cleaned[day] = state === 'tbm' ? 'work' : state })
       await setDoc(doc(db, 'schedules', `${year}-${month}-${emp.id}`), {
         year, month, employeeId: emp.id, days: cleaned
-      })
+      }, { merge: true })
     }
   }
 
@@ -125,7 +132,17 @@ export default function SchedulePage() {
     for (const emp of employees) {
       await setDoc(doc(db, 'schedules', `${year}-${month}-${emp.id}`), {
         year, month, employeeId: emp.id, days: {}
-      })
+      }, { merge: true })
+    }
+  }
+
+  const toggleFix = async (empId, currentFixed) => {
+    await setDoc(doc(db, 'schedules', `${year}-${month}-${empId}`), { fixed: !currentFixed }, { merge: true })
+  }
+
+  const toggleFixAll = async (fixAll) => {
+    for (const emp of employees) {
+      await setDoc(doc(db, 'schedules', `${year}-${month}-${emp.id}`), { fixed: fixAll }, { merge: true })
     }
   }
 
@@ -134,7 +151,7 @@ export default function SchedulePage() {
     const days = []
     for (let d = 1; d <= n; d++) {
       const isSun = getDayIdx(year, month, d) === 0
-      const state = (schedules[empId] || {})[d] ?? (isSun ? 'off' : 'work')
+      const state = (schedules[empId]?.days || {})[d] ?? (isSun ? 'off' : 'work')
       if (state !== 'off') days.push(d)
     }
     return days
@@ -144,7 +161,7 @@ export default function SchedulePage() {
     const n = getDaysInMonth(year, month)
     const days = []
     for (let d = 1; d <= n; d++) {
-      if ((schedules[empId] || {})[d] === 'tbm') days.push(d)
+      if ((schedules[empId]?.days || {})[d] === 'tbm') days.push(d)
     }
     return days
   }
@@ -201,7 +218,7 @@ export default function SchedulePage() {
         c(emp.name, { fill: { fgColor: { rgb: bg } }, font: { bold: true, sz: 10, color: { rgb: '1E3A5F' } }, border: bdrMid }),
         ...daysArr.map(d => {
           const isSun = getDayIdx(year, month, d) === 0
-          const state = (schedules[emp.id] || {})[d] ?? (isSun ? 'off' : 'work')
+          const state = (schedules[emp.id]?.days || {})[d] ?? (isSun ? 'off' : 'work')
           const fillRgb = state === 'work' ? '1A1A1A' : state === 'tbm' ? 'DC2626' : isSun ? 'FEF2F2' : 'FFFFFF'
           return blank({ fill: { fgColor: { rgb: fillRgb } }, border: bdrMid })
         }),
@@ -263,7 +280,7 @@ export default function SchedulePage() {
         c(emp.name, { fill: { fgColor: { rgb: bg } }, font: { bold: true, sz: 9, color: { rgb: '1E3A5F' } } }),
         blank({ fill: { fgColor: { rgb: bg } } }),
         ...daysArr.map(d => {
-          const isTBM = (schedules[emp.id] || {})[d] === 'tbm'
+          const isTBM = (schedules[emp.id]?.days || {})[d] === 'tbm'
           return c(isTBM ? `${d}일` : '', { fill: { fgColor: { rgb: isTBM ? 'FEF2F2' : bg } }, font: { sz: 8, color: { rgb: isTBM ? 'DC2626' : '000000' }, bold: isTBM } })
         }),
         blank({ fill: { fgColor: { rgb: bg } } }),
@@ -298,17 +315,6 @@ export default function SchedulePage() {
     XLSXStyle.writeFile(wb, `근무계획표_${year}년${month}월.xlsx`)
   }
 
-  const handleAdminConfirm = () => {
-    if (adminInput === ADMIN_PW) {
-      setAdminMode(true)
-      setShowAdminModal(false)
-      setAdminInput('')
-      setAdminErr(false)
-    } else {
-      setAdminErr(true)
-    }
-  }
-
   const prevMonth = () => month === 1 ? (setYear(y => y - 1), setMonth(12)) : setMonth(m => m - 1)
   const nextMonth = () => month === 12 ? (setYear(y => y + 1), setMonth(1)) : setMonth(m => m + 1)
   const days = Array.from({ length: getDaysInMonth(year, month) }, (_, i) => i + 1)
@@ -330,12 +336,6 @@ export default function SchedulePage() {
           <button onClick={exportExcel} style={{ padding: '0.45rem 1rem', background: '#16a34a', color: '#fff', border: 'none', borderRadius: '0.5rem', cursor: 'pointer', fontWeight: '700', fontSize: '0.85rem' }}>
             📊 엑셀 저장
           </button>
-          <button
-            onClick={() => adminMode ? setAdminMode(false) : setShowAdminModal(true)}
-            style={{ padding: '0.45rem 1rem', background: adminMode ? '#f59e0b' : '#64748b', color: '#fff', border: 'none', borderRadius: '0.5rem', cursor: 'pointer', fontWeight: '700', fontSize: '0.85rem' }}
-          >
-            🔑 {adminMode ? '관리자 종료' : '관리자'}
-          </button>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem', color: '#64748b' }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><i style={{ display: 'inline-block', width: 12, height: 12, background: '#1a1a1a' }} />근무</span>
@@ -346,44 +346,45 @@ export default function SchedulePage() {
 
       {/* 관리자 패널 */}
       {adminMode && (
-        <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '0.5rem', padding: '0.75rem 1rem', marginBottom: '1rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontWeight: '700', color: '#c2410c', fontSize: '0.85rem' }}>🔑 관리자 모드</span>
-          <button onClick={autoAssignTBM} style={{ padding: '0.4rem 0.9rem', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '0.4rem', cursor: 'pointer', fontWeight: '600', fontSize: '0.8rem' }}>
-            ⚡ TBM 자동배치
-          </button>
-          <button onClick={resetTBM} style={{ padding: '0.4rem 0.9rem', background: '#fef3c7', color: '#92400e', border: '1px solid #fbbf24', borderRadius: '0.4rem', cursor: 'pointer', fontWeight: '600', fontSize: '0.8rem' }}>
-            TBM 초기화
-          </button>
-          <button onClick={resetMonth} style={{ padding: '0.4rem 0.9rem', background: '#fef2f2', color: '#991b1b', border: '1px solid #fca5a5', borderRadius: '0.4rem', cursor: 'pointer', fontWeight: '600', fontSize: '0.8rem' }}>
-            이달 전체 초기화
-          </button>
-        </div>
-      )}
-
-      {/* 관리자 비밀번호 모달 */}
-      {showAdminModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}
-          onClick={() => { setShowAdminModal(false); setAdminInput(''); setAdminErr(false) }}>
-          <div style={{ background: '#fff', borderRadius: '0.75rem', padding: '1.5rem', width: '100%', maxWidth: '320px', margin: '1rem' }}
-            onClick={e => e.stopPropagation()}>
-            <h3 style={{ fontWeight: '700', color: '#1e3a5f', marginBottom: '1rem' }}>🔑 관리자 인증</h3>
-            <input
-              type="password"
-              value={adminInput}
-              onChange={e => { setAdminInput(e.target.value); setAdminErr(false) }}
-              onKeyDown={e => e.key === 'Enter' && handleAdminConfirm()}
-              placeholder="비밀번호 입력"
-              autoFocus
-              style={{ width: '100%', padding: '0.65rem', border: `1px solid ${adminErr ? '#ef4444' : '#e2e8f0'}`, borderRadius: '0.5rem', marginBottom: '0.4rem', fontSize: '0.9rem', outline: 'none', boxSizing: 'border-box' }}
-            />
-            {adminErr && <div style={{ color: '#ef4444', fontSize: '0.8rem', marginBottom: '0.5rem' }}>비밀번호가 틀렸습니다.</div>}
-            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-              <button onClick={() => { setShowAdminModal(false); setAdminInput(''); setAdminErr(false) }}
-                style={{ flex: 1, padding: '0.65rem', background: '#f1f5f9', border: 'none', borderRadius: '0.5rem', cursor: 'pointer' }}>취소</button>
-              <button onClick={handleAdminConfirm}
-                style={{ flex: 1, padding: '0.65rem', background: '#1e3a5f', color: '#fff', border: 'none', borderRadius: '0.5rem', cursor: 'pointer', fontWeight: '600' }}>확인</button>
-            </div>
+        <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '0.5rem', padding: '0.75rem 1rem', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: employees.length > 0 ? '0.6rem' : 0 }}>
+            <span style={{ fontWeight: '700', color: '#c2410c', fontSize: '0.85rem' }}>🔑 관리자 모드</span>
+            <button onClick={autoAssignTBM} style={{ padding: '0.4rem 0.9rem', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '0.4rem', cursor: 'pointer', fontWeight: '600', fontSize: '0.8rem' }}>
+              ⚡ TBM 자동배치
+            </button>
+            <button onClick={resetTBM} style={{ padding: '0.4rem 0.9rem', background: '#fef3c7', color: '#92400e', border: '1px solid #fbbf24', borderRadius: '0.4rem', cursor: 'pointer', fontWeight: '600', fontSize: '0.8rem' }}>
+              TBM 초기화
+            </button>
+            <button onClick={resetMonth} style={{ padding: '0.4rem 0.9rem', background: '#fef2f2', color: '#991b1b', border: '1px solid #fca5a5', borderRadius: '0.4rem', cursor: 'pointer', fontWeight: '600', fontSize: '0.8rem' }}>
+              이달 전체 초기화
+            </button>
           </div>
+          {employees.length > 0 && (
+            <div style={{ borderTop: '1px solid #fed7aa', paddingTop: '0.6rem' }}>
+              <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginBottom: '0.4rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.78rem', color: '#92400e', fontWeight: '600' }}>근무 잠금 ({year}년 {month}월):</span>
+                <button onClick={() => toggleFixAll(true)} style={{ padding: '0.2rem 0.6rem', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '0.3rem', cursor: 'pointer', fontSize: '0.75rem', fontWeight: '600' }}>
+                  🔒 전체 Fix
+                </button>
+                <button onClick={() => toggleFixAll(false)} style={{ padding: '0.2rem 0.6rem', background: '#16a34a', color: '#fff', border: 'none', borderRadius: '0.3rem', cursor: 'pointer', fontSize: '0.75rem', fontWeight: '600' }}>
+                  🔓 전체 해제
+                </button>
+              </div>
+              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                {employees.map(emp => {
+                  const isFixed = schedules[emp.id]?.fixed
+                  return (
+                    <div key={emp.id} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', background: isFixed ? '#fef2f2' : '#f0fdf4', border: `1px solid ${isFixed ? '#fca5a5' : '#86efac'}`, borderRadius: '0.4rem', padding: '0.2rem 0.5rem' }}>
+                      <span style={{ fontSize: '0.78rem', fontWeight: '600', color: '#1e3a5f' }}>{emp.name}</span>
+                      <button onClick={() => toggleFix(emp.id, isFixed)} style={{ padding: '0.15rem 0.4rem', background: isFixed ? '#dc2626' : '#16a34a', color: '#fff', border: 'none', borderRadius: '0.25rem', cursor: 'pointer', fontSize: '0.72rem' }}>
+                        {isFixed ? '🔒 해제' : '🔓 Fix'}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -419,16 +420,17 @@ export default function SchedulePage() {
                     )
                   })}
                   <th style={{ ...TH, background: '#f8fafc', padding: '0 8px', minWidth: '52px' }}>근무<br/>일수</th>
+                  <th style={{ ...TH, background: '#fef2f2', color: '#dc2626', padding: '0 8px', minWidth: '52px' }}>TBM<br/>일수</th>
                 </tr>
               </thead>
               <tbody>
                 {employees.map((emp) => (
                   <tr key={emp.id}>
                     <td style={{ ...TD, ...ROW_BORDER, padding: '0 8px', color: '#475569', fontWeight: '500', whiteSpace: 'nowrap' }}>{emp.role || '-'}</td>
-                    <td style={{ ...TD, ...ROW_BORDER, padding: '0 10px', fontWeight: '700', color: '#1e3a5f', whiteSpace: 'nowrap' }}>{emp.name}</td>
+                    <td style={{ ...TD, ...ROW_BORDER, padding: '0 10px', fontWeight: '700', color: '#1e3a5f', whiteSpace: 'nowrap' }}>{emp.name}{schedules[emp.id]?.fixed && <span style={{ fontSize: '10px', color: '#dc2626', marginLeft: '3px' }}>🔒</span>}</td>
                     {days.map(d => {
                       const isSun = getDayIdx(year, month, d) === 0
-                      const state = (schedules[emp.id] || {})[d] ?? (isSun ? 'off' : 'work')
+                      const state = (schedules[emp.id]?.days || {})[d] ?? (isSun ? 'off' : 'work')
                       return (
                         <td
                           key={d}
@@ -439,6 +441,9 @@ export default function SchedulePage() {
                     })}
                     <td style={{ ...TD, ...ROW_BORDER, textAlign: 'center', fontWeight: '700', color: '#1e3a5f', padding: '0 4px' }}>
                       {getWorkDays(emp.id).length}일
+                    </td>
+                    <td style={{ ...TD, ...ROW_BORDER, textAlign: 'center', fontWeight: '700', color: '#dc2626', padding: '0 4px', background: '#fef2f2' }}>
+                      {getTBMDays(emp.id).length}일
                     </td>
                   </tr>
                 ))}

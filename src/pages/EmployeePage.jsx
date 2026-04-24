@@ -1,16 +1,21 @@
 import { useState, useEffect } from 'react'
 import { collection, addDoc, deleteDoc, doc, onSnapshot, orderBy, query, updateDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from '../firebase'
+import { useAdmin } from '../context/AdminContext'
 
 const ROLES = ['책임 감리원', '보조 감리원', '기타']
 const GRADES = ['전기/특급', '전기/고급', '전기/중급', '전기/초급', '토목/초급', '사무원']
 const EMPTY = { name: '', role: '책임 감리원', grade: '전기/특급' }
 
 export default function EmployeePage() {
+  const { adminMode, openModal } = useAdmin()
   const [employees, setEmployees] = useState([])
   const [form, setForm] = useState(EMPTY)
   const [adding, setAdding] = useState(false)
   const [nameErr, setNameErr] = useState('')
+  const [editing, setEditing] = useState(null)
+  const [editForm, setEditForm] = useState(EMPTY)
+  const [editNameErr, setEditNameErr] = useState('')
 
   useEffect(() => {
     const q = query(collection(db, 'employees'), orderBy('order', 'asc'))
@@ -29,6 +34,15 @@ export default function EmployeePage() {
     setNameErr('')
   }
 
+  const handleEdit = async () => {
+    if (!editForm.name.trim()) { setEditNameErr('이름을 입력해주세요.'); return }
+    await updateDoc(doc(db, 'employees', editing.id), {
+      name: editForm.name.trim(), role: editForm.role, grade: editForm.grade,
+    })
+    setEditing(null)
+    setEditNameErr('')
+  }
+
   const handleDelete = async (id) => {
     if (confirm('삭제하시겠습니까?')) await deleteDoc(doc(db, 'employees', id))
   }
@@ -39,6 +53,19 @@ export default function EmployeePage() {
     const cur = employees[idx]
     await updateDoc(doc(db, 'employees', cur.id), { order: target.order })
     await updateDoc(doc(db, 'employees', target.id), { order: cur.order })
+  }
+
+  if (!adminMode) {
+    return (
+      <div style={{ padding: '4rem 1.25rem', textAlign: 'center', color: '#94a3b8' }}>
+        <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>🔒</div>
+        <div style={{ fontSize: '1rem', fontWeight: '600', color: '#475569', marginBottom: '0.5rem' }}>관리자 권한이 필요합니다</div>
+        <div style={{ fontSize: '0.85rem', marginBottom: '1.5rem' }}>상단의 🔑 관리자 버튼으로 인증해주세요.</div>
+        <button onClick={openModal} style={{ padding: '0.6rem 1.5rem', background: '#1e3a5f', color: '#fff', border: 'none', borderRadius: '0.5rem', cursor: 'pointer', fontWeight: '600' }}>
+          🔑 관리자 인증
+        </button>
+      </div>
+    )
   }
 
   return (
@@ -84,6 +111,42 @@ export default function EmployeePage() {
         </div>
       )}
 
+      {editing && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}
+          onClick={() => { setEditing(null); setEditNameErr('') }}>
+          <div style={{ background: '#fff', borderRadius: '0.75rem', padding: '1.5rem', width: '100%', maxWidth: '400px', margin: '1rem' }}
+            onClick={e => e.stopPropagation()}>
+            <h3 style={{ fontWeight: '700', color: '#1e3a5f', marginBottom: '1rem' }}>직원 정보 수정</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
+              <div>
+                <label style={labelS}>이름 *</label>
+                <input value={editForm.name} onChange={e => { setEditForm(p => ({ ...p, name: e.target.value })); setEditNameErr('') }}
+                  placeholder="직원 이름" style={{ ...inputS, border: editNameErr ? '1px solid #ef4444' : '1px solid #e2e8f0' }} />
+                {editNameErr && <div style={{ color: '#ef4444', fontSize: '12px', marginTop: '2px' }}>{editNameErr}</div>}
+              </div>
+              <div>
+                <label style={labelS}>역할 *</label>
+                <select value={editForm.role} onChange={e => setEditForm(p => ({ ...p, role: e.target.value }))} style={inputS}>
+                  {ROLES.map(r => <option key={r}>{r}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={labelS}>직종 및 등급 *</label>
+              <select value={editForm.grade} onChange={e => setEditForm(p => ({ ...p, grade: e.target.value }))} style={inputS}>
+                {GRADES.map(g => <option key={g}>{g}</option>)}
+              </select>
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button onClick={() => { setEditing(null); setEditNameErr('') }}
+                style={{ flex: 1, padding: '0.65rem', background: '#f1f5f9', border: 'none', borderRadius: '0.5rem', cursor: 'pointer' }}>취소</button>
+              <button onClick={handleEdit}
+                style={{ flex: 1, padding: '0.65rem', background: '#1e3a5f', color: '#fff', border: 'none', borderRadius: '0.5rem', cursor: 'pointer', fontWeight: '600' }}>저장</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ background: '#fff', borderRadius: '0.75rem', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', overflow: 'hidden' }}>
         {employees.length === 0 ? (
           <div style={{ padding: '3rem', textAlign: 'center', color: '#94a3b8' }}>
@@ -112,10 +175,16 @@ export default function EmployeePage() {
                   <td style={{ padding: '0.7rem 1rem', color: '#374151' }}>{emp.role}</td>
                   <td style={{ padding: '0.7rem 1rem', color: '#64748b', fontSize: '0.875rem' }}>{emp.grade || '-'}</td>
                   <td style={{ padding: '0.7rem 1rem' }}>
-                    <button onClick={() => handleDelete(emp.id)}
-                      style={{ padding: '0.3rem 0.75rem', background: '#fef2f2', color: '#dc2626', border: '1px solid #fca5a5', borderRadius: '0.3rem', cursor: 'pointer', fontSize: '0.8rem' }}>
-                      삭제
-                    </button>
+                    <div style={{ display: 'flex', gap: '0.4rem' }}>
+                      <button onClick={() => { setEditing(emp); setEditForm({ name: emp.name, role: emp.role, grade: emp.grade || '전기/특급' }) }}
+                        style={{ padding: '0.3rem 0.75rem', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: '0.3rem', cursor: 'pointer', fontSize: '0.8rem' }}>
+                        수정
+                      </button>
+                      <button onClick={() => handleDelete(emp.id)}
+                        style={{ padding: '0.3rem 0.75rem', background: '#fef2f2', color: '#dc2626', border: '1px solid #fca5a5', borderRadius: '0.3rem', cursor: 'pointer', fontSize: '0.8rem' }}>
+                        삭제
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
